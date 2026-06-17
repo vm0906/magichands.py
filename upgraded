@@ -1,0 +1,209 @@
+import cv2
+import mediapipe as mp
+import math
+import random
+import os
+import urllib.request
+import numpy as np
+
+# --- AUTOMATIC MODEL DOWNLOADER ---
+model_filename = 'hand_landmarker.task'
+if not os.path.exists(model_filename):
+    print("=== Downloading AI Model file... Please wait ===")
+    url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+    urllib.request.urlretrieve(url, model_filename)
+    print("=== Download Complete! ===")
+
+# --- MEDIAPIPE TASKS API INITIALIZATION ---
+BaseOptions = mp.tasks.BaseOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+
+options = HandLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path=model_filename),
+    running_mode=VisionRunningMode.VIDEO,
+    num_hands=2,
+    min_hand_detection_confidence=0.55,
+    min_hand_presence_confidence=0.55
+)
+detector = HandLandmarker.create_from_options(options)
+
+# --- AUTOMATIC CAMERA SELECTOR ---
+cap = None
+for index in [0, 1, 2]:
+    cap = cv2.VideoCapture(index)
+    if cap.isOpened():
+        print(f"=== SUCCESS: Camera connected on Port Index {index} ===")
+        break
+    cap.release()
+
+if not cap or not cap.isOpened():
+    print("\n[CRITICAL ERROR] Camera open panna mudiyala!")
+    exit()
+
+print("=== 360 SPARK ENGINE & COMPACT FUSION ONLINE ===")
+print("Gravity removed from sparks. White core avoided on fusion.")
+print("Press 'q' inside the camera window to CLOSE.")
+
+frame_timestamp_ms = 0
+
+# FUSION SPARK STREAM VARIABLES
+fused_sparks = []
+MAX_FUSED_SPARKS = 150 
+
+def draw_flaming_orb(target_surface, cx, cy, radius, time_ms, is_fused=False, colors=None):
+    """Draws randomized wavy fire shapes with an upward licking motion (Zero Lag)."""
+    if radius <= 0: return
+    
+    if not colors:
+        colors = [(0, 45, 230), (0, 140, 255), (180, 255, 255)] # Outer Red, Mid Orange, Inner Core
+        
+    if is_fused:
+        # AVOID WHITE: Fusion ball uses intense orange/yellow layers but NO absolute white core
+        layers = [
+            (radius, colors[0], 0.25),            # Outer irregular fire envelope
+            (int(radius * 0.7), colors[1], 0.18),   # Middle hot flame layer
+            (int(radius * 0.4), (0, 200, 255), 0.10) # Safe Yellow/Orange inner core (No white!)
+        ]
+    else:
+        # Standard layout for single hands
+        layers = [
+            (radius, colors[0], 0.25),
+            (int(radius * 0.7), colors[1], 0.18),
+            (int(radius * 0.35), colors[2], 0.08)
+        ]
+    
+    time_phase = (time_ms / 100.0)
+    
+    for r, color, wave_amp in layers:
+        if r <= 0: continue
+        points = []
+        
+        for angle_deg in range(0, 360, 12):
+            angle_rad = math.radians(angle_deg)
+            
+            wave1 = math.sin(angle_rad * 3 + time_phase)
+            wave2 = math.cos(angle_rad * 7 - time_phase * 1.5)
+            combined_wave = (wave1 * 0.6) + (wave2 * 0.4)
+            
+            upward_bias = 1.0 - math.sin(angle_rad) 
+            dynamic_r = r + (combined_wave * (r * wave_amp) * (upward_bias * 0.8))
+            dynamic_r += random.randint(-3, 3) if wave_amp > 0 else 0
+            
+            x = int(cx + dynamic_r * math.cos(angle_rad))
+            y = int(cy + dynamic_r * math.sin(angle_rad) - (r * 0.15 * upward_bias))
+            
+            points.append((x, y))
+            
+        if len(points) > 0:
+            cv2.fillPoly(target_surface, [np.array(points, np.int32)], color, lineType=cv2.LINE_AA)
+
+while cap.isOpened():
+    success, frame = cap.read()
+    if not success: continue
+
+    frame = cv2.flip(frame, 1)
+    h, w, c = frame.shape
+    
+    magic_overlay = np.zeros_like(frame)
+    spark_overlay = np.zeros_like(frame) 
+    
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+    
+    frame_timestamp_ms += 33 
+    detection_result = detector.detect_for_video(mp_image, frame_timestamp_ms)
+    
+    active_hands = {}
+
+    if detection_result.hand_landmarks and detection_result.handedness:
+        for idx, hand_landmarks in enumerate(detection_result.hand_landmarks):
+            if idx >= len(detection_result.handedness): break
+            
+            hand_label = detection_result.handedness[idx][0].category_name
+            wrist, index_base, pinky_base = hand_landmarks[0], hand_landmarks[5], hand_landmarks[17]
+            
+            palm_x = int((wrist.x + index_base.x + pinky_base.x) / 3 * w)
+            palm_y = int((wrist.y + index_base.y + pinky_base.y) / 3 * h)
+            current_cx, current_cy = palm_x, palm_y - 45
+            
+            hand_size = math.hypot(index_base.x - pinky_base.x, index_base.y - pinky_base.y) * w
+            current_radius = max(35, int(hand_size * 1.25))
+            
+            active_hands[hand_label] = {"cx": current_cx, "cy": current_cy, "radius": current_radius}
+
+    # --- DUAL HAND FUSION CHECK ---
+    hands_are_fused = False
+    fused_cx, fused_cy, fused_radius = 0, 0, 0
+
+    if "Left" in active_hands and "Right" in active_hands:
+        lh = active_hands["Left"]
+        rh = active_hands["Right"]
+        if math.hypot(lh["cx"] - rh["cx"], lh["cy"] - rh["cy"]) < 155:
+            hands_are_fused = True
+            fused_cx = int((lh["cx"] + rh["cx"]) / 2)
+            fused_cy = int((lh["cy"] + rh["cy"]) / 2)
+            # CHANGE: Reduced multiplier factor to 1.15 to keep the fireball compact
+            fused_radius = int((lh["radius"] + rh["radius"]) * 1.15)
+
+    # --- RENDERING ROUTINE GATES ---
+    if hands_are_fused:
+        # Drawing the fusion fireball with is_fused=True flag enabled
+        draw_flaming_orb(magic_overlay, fused_cx, fused_cy, fused_radius, frame_timestamp_ms, is_fused=True)
+        
+        # --- 360-DEGREE THIN SPARK EMITTER ---
+        if len(fused_sparks) < MAX_FUSED_SPARKS:
+            for _ in range(5): 
+                # Launch directions mapped uniformly across 360 degrees using radians
+                launch_angle = math.radians(random.uniform(0, 360))
+                launch_speed = random.uniform(3.5, 7.5)
+                
+                fused_sparks.append({
+                    'x': float(fused_cx),
+                    'y': float(fused_cy),
+                    'vx': launch_speed * math.cos(launch_angle),
+                    'vy': launch_speed * math.sin(launch_angle), # Radial velocity maps
+                    'life': 1.0,
+                    'decay': random.uniform(0.02, 0.045),
+                    'thickness': random.randint(1, 2)
+                })
+    else:
+        for label, h_info in active_hands.items():
+            draw_flaming_orb(magic_overlay, h_info["cx"], h_info["cy"], h_info["radius"], frame_timestamp_ms, is_fused=False)
+
+    # --- RADIAL SPARK ENGINE (NO GRAVITY) ---
+    active_sparks = []
+    for spark in fused_sparks:
+        old_x, old_y = int(spark['x']), int(spark['y'])
+        
+        # Sparks fly outwards on a perfect linear vector paths
+        spark['x'] += spark['vx']
+        spark['y'] += spark['vx'] * (spark['vy'] / (spark['vx'] if spark['vx'] != 0 else 0.01)) # Dynamic clean slope preservation
+        spark['y'] += spark['vy'] # GRAVITY REMOVED HERE
+        spark['life'] -= spark['decay']
+        
+        if spark['life'] > 0 and 0 <= spark['y'] < h and 0 <= spark['x'] < w:
+            active_sparks.append(spark)
+            
+            # Avoid bright white sparks on fusion; shift straight to rich deep fire palettes
+            if spark['life'] > 0.5:
+                color = (0, 205, 255)  # Bright Hot Orange
+            else:
+                color = (0, 45, 215)   # Cooling charcoal Red
+                
+            cv2.line(spark_overlay, (old_x, old_y), (int(spark['x']), int(spark['y'])), color, spark['thickness'], lineType=cv2.LINE_AA)
+            
+    fused_sparks = active_sparks
+
+    # Layer stitching blend maps
+    frame = cv2.addWeighted(frame, 1.0, magic_overlay, 1.0, 0)
+    frame = cv2.addWeighted(frame, 1.0, spark_overlay, 0.9, 0)
+    
+    cv2.imshow('Witch Yellow Fire Hands', frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'): break
+
+detector.close()
+cap.release()
+cv2.destroyAllWindows()
+print("=== PROGRAM CLOSED SAFELY ===")
